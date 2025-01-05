@@ -1,44 +1,47 @@
 const { parentPort, workerData } = require("worker_threads");
-const { spawnSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
 
 try {
-    const { code, input, files } = workerData;
+    const { code } = workerData;
 
-    // Create a temporary directory for processing files
-    const tempDir = path.resolve("/tmp/html-compiler");
-    fs.mkdirSync(tempDir, { recursive: true });
+    // Example HTML page to be displayed in the iframe
+    const htmlPage = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Compiled Output</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    background-color: #f0f0f0;
+                    color: #333;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    margin: 0;
+                }
+                h1 {
+                    color: #007BFF;
+                }
+                p {
+                    font-size: 1.2rem;
+                }
+            </style>
+        </head>
+        <body>
+            <div>
+                <h1>HTML Compilation Result</h1>
+                <p>This is a predefined HTML page shown in the iframe.</p>
+                <p>Your input HTML:</p>
+                <pre>${code.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
+            </div>
+        </body>
+        </html>
+    `;
 
-    // Write the main HTML file
-    const mainFile = path.join(tempDir, "index.html");
-    fs.writeFileSync(mainFile, code);
-
-    // Write additional files to the directory
-    if (files && files.length > 0) {
-        files.forEach((file) => {
-            const filePath = path.join(tempDir, file.name);
-            fs.writeFileSync(filePath, file.content);
-        });
-    }
-
-    // Simulate rendering or validation
-    const runProcess = spawnSync("node", ["-e", "console.log('HTML compiled successfully.')"], {
-        encoding: "utf-8",
-        timeout: 5000,
-    });
-
-    // Check for runtime errors
-    if (runProcess.error) {
-        throw new Error(runProcess.error.message);
-    }
-
-    if (runProcess.stderr) {
-        throw new Error(runProcess.stderr);
-    }
-
-    // Return success message
-    parentPort.postMessage({ output: "HTML compiled and files processed successfully!" });
+    parentPort.postMessage({ output: htmlPage });
 } catch (err) {
     console.error("Error in worker:", err.message);
     parentPort.postMessage({ error: `Worker Error: ${err.message}` });
