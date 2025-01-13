@@ -1,68 +1,43 @@
-function runCode() {
-  const loader = document.getElementById("loader");
-  const runner = document.getElementById("run");
+const { parentPort, workerData } = require('worker_threads');
+const { exec } = require('child_process');
 
-  runner.style.display = "none";
-  loader.style.display = "inline-block";
+// This function compiles and runs the code
+function runCode(code, input) {
+  // Save the code to a temporary file (e.g., temp.cpp for C++ code)
+  const fs = require('fs');
+  const path = require('path');
+  const tempFilePath = path.join(__dirname, 'temp.cpp');
+  const outputFilePath = path.join(__dirname, 'temp.out');
+  
+  fs.writeFileSync(tempFilePath, code, 'utf8');
 
-  const code = editor.getValue();
-  const input = document.getElementById("input").value;
+  // Compile the C++ code using g++ (adjust for other languages accordingly)
+  const compileCommand = `g++ ${tempFilePath} -o ${outputFilePath}`;
+  exec(compileCommand, (compileError, compileStdout, compileStderr) => {
+    if (compileError || compileStderr) {
+      // If compilation fails, return the error
+      parentPort.postMessage({ error: { fullError: `Compilation Error: ${compileStderr || compileError.message}` } });
+      return;
+    }
 
-  const outputDiv = document.getElementById("output");
-  outputDiv.textContent = "Executing..."; // Placeholder text
-
-  const ioTabButton = document.querySelector(".tab-left .tab-btn:nth-child(2)");
-  activateTab(ioTabButton);
-  showIO();
-
-  const startTime = Date.now(); // Record the start time
-  const timeoutDuration = 30000; // Timeout duration for the request
-
-  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Request Timeout")), timeoutDuration));
-
-  const fetchPromise = fetch("https://blaze-cpp-compiler.onrender.com", {
-      method: "POST",
-      headers: {
-          "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-          code,
-          input,
-      }),
-  })
-  .then((response) => {
-      if (!response.ok) {
-          throw new Error(`Server Error: ${response.statusText}`);
+    // Run the compiled executable (passing input if necessary)
+    const runCommand = `${outputFilePath} ${input ? `< ${input}` : ''}`;
+    exec(runCommand, (runError, runStdout, runStderr) => {
+      if (runError || runStderr) {
+        // If execution fails, return the error
+        parentPort.postMessage({ error: { fullError: `Runtime Error: ${runStderr || runError.message}` } });
+        return;
       }
-      return response.json();
+
+      // Return the output of the code execution
+      parentPort.postMessage({ output: runStdout || 'No output' });
+
+      // Clean up the temporary files
+      fs.unlinkSync(tempFilePath);
+      fs.unlinkSync(outputFilePath);
+    });
   });
-
-  Promise.race([fetchPromise, timeoutPromise])
-      .then((data) => {
-          const endTime = Date.now(); // Record the end time
-          const timeTaken = ((endTime - startTime) / 1000).toFixed(2); // Time in seconds
-
-          if (data.error) {
-              // Handle errors (compilation or runtime)
-              outputDiv.textContent = data.error.fullError || "No output received!";
-          } else {
-              // Handle successful execution
-              outputDiv.textContent = data.output || "No output received!";
-          }
-
-          // Add success message and time taken
-          setTimeout(() => {
-              outputDiv.textContent += `\n\n===Code executed successfully===\nTimeTaken: ${timeTaken} seconds`;
-          }, 100);
-
-          loader.style.display = "none";
-          runner.style.display = "flex";
-      })
-      .catch((error) => {
-          console.error("Error occurred:", error);
-          outputDiv.textContent = `Error running code: ${error.message}`;
-
-          loader.style.display = "none";
-          runner.style.display = "flex";
-      });
 }
+
+// Process the incoming code and input from the main thread
+runCode(workerData.code, workerData.input);
