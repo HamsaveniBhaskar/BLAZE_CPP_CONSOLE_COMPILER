@@ -10,6 +10,9 @@ const port = 3000;
 app.use(require("cors")());
 app.use(express.json());
 
+const NodeCache = require("node-cache");
+const myCache = new NodeCache(); // Initialize the cache
+
 app.post("/", (req, res) => {
     const { code, input } = req.body;
 
@@ -18,22 +21,21 @@ app.post("/", (req, res) => {
         return res.status(400).json({ error: { fullError: "Error: No code provided!" } });
     }
 
-    // Generate a unique hash for the code to cache the result
     const codeHash = crypto.createHash("md5").update(code).digest("hex");
 
     // Check if result is cached
-    if (cache.has(codeHash)) {
-        return res.json({ output: cache.get(codeHash).result });
+    let cachedOutput = myCache.get(codeHash);
+    if (cachedOutput) {
+        return res.json({ output: cachedOutput });
     }
 
-    // Pass the code and user input to the worker
     const worker = new Worker("./compiler-worker.js", {
         workerData: { code, input },
     });
 
     worker.on("message", (result) => {
         if (result.output) {
-            manageCache(codeHash, result.output);
+            myCache.set(codeHash, result.output); // Cache the result
         }
         res.json(result);
     });
@@ -48,7 +50,6 @@ app.post("/", (req, res) => {
         }
     });
 });
-
 
 // Health check endpoint
 app.get("/health", (req, res) => {
