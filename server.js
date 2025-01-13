@@ -1,62 +1,47 @@
-const express = require("express");
-const { Worker, isMainThread } = require("worker_threads");
-const crypto = require("crypto");
-const WebSocket = require("ws");  // Import WebSocket module
-
+const express = require('express');
+const WebSocket = require('ws');
+const { Worker } = require('worker_threads');
 const app = express();
 const port = 3000;
 
-// WebSocket server setup
-const wss = new WebSocket.Server({ port: 8080 });
+// Set up WebSocket server
+const wss = new WebSocket.Server({ noServer: true });
 
-wss.on("connection", (ws) => {
-    console.log("Client connected");
-    ws.on("close", () => {
-        console.log("Client disconnected");
+wss.on('connection', (ws) => {
+  ws.on('message', (message) => {
+    // Handle incoming message (code to be compiled and run)
+    console.log(`Received message: ${message}`);
+
+    // Create a worker thread for compilation and execution
+    const worker = new Worker('./compiler-worker.js', {
+      workerData: { code: message, input: '' }, // Passing input as an empty string
     });
+
+    worker.on('message', (result) => {
+      // Send output back to the client via WebSocket
+      if (result.output) {
+        ws.send(result.output);  // Send back the program output
+      }
+
+      if (result.error) {
+        ws.send(result.error.fullError);  // Send back the error message
+      }
+    });
+
+    worker.on('error', (err) => {
+      ws.send(`Error: ${err.message}`);
+    });
+  });
 });
 
-app.use(require("cors")());
-app.use(express.json());
-
-// POST endpoint for code compilation and execution
-app.post("/", (req, res) => {
-    const { code, input } = req.body;
-
-    if (!code) {
-        return res.status(400).json({ error: { fullError: "Error: No code provided!" } });
-    }
-
-    const codeHash = crypto.createHash("md5").update(code).digest("hex");
-
-    const worker = new Worker("./compiler-worker.js", {
-        workerData: { code, input },
-    });
-
-    worker.on("message", (result) => {
-        if (result.output) {
-            res.json(result);
-        }
-        if (result.output) {
-            wss.clients.forEach((client) => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.send(result.output);  // Send output to the frontend via WebSocket
-                }
-            });
-        }
-    });
-
-    worker.on("error", (err) => {
-        res.status(500).json({ error: { fullError: `Worker error: ${err.message}` } });
-    });
-
-    worker.on("exit", (code) => {
-        if (code !== 0) {
-            console.error(`Worker stopped with exit code ${code}`);
-        }
-    });
+// HTTP server for handling other requests (if necessary)
+const server = app.listen(port, () => {
+  console.log(`Server is running on http://localhost:${port}`);
 });
 
-app.listen(port, () => {
-    console.log(`Server is running on http://localhost:${port}`);
+// Handle WebSocket upgrade
+server.on('upgrade', (request, socket, head) => {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
 });
