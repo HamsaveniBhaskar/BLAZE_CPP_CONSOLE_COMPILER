@@ -11,38 +11,38 @@ app.use(require("cors")());
 app.use(express.json());
 
 app.post("/", (req, res) => {
-  const { code, input } = req.body;
+    const { code, input } = req.body;
 
-  // Validate the input data
-  if (!code || !input) {
-      return res.status(400).json({
-          error: { fullError: "Error: Missing code or input" }
-      });
-  }
+    // Validate the input data
+    if (!code || !input) {
+        return res.status(400).json({
+            error: { fullError: "Error: Missing code or input" }
+        });
+    }
 
-  // Generate a unique hash for the code
-  const codeHash = crypto.createHash("md5").update(code).digest("hex");
+    // Generate a unique hash for the code
+    const codeHash = crypto.createHash("md5").update(code).digest("hex");
 
-  // Create a worker thread for compilation
-  const worker = new Worker("./compiler-worker.js", {
-      workerData: { code, input },  // Ensure the code and input are passed correctly
-  });
+    // Create a worker thread for compilation
+    const worker = new Worker("./compiler-worker.js", {
+        workerData: { code, input },  // Pass the code and input to the worker
+    });
 
-  worker.on("message", (result) => {
-      res.json(result);
-  });
+    worker.on("message", (result) => {
+        res.json(result);
+    });
 
-  worker.on("error", (err) => {
-      res.status(500).json({
-          error: { fullError: `Worker error: ${err.message}` }
-      });
-  });
+    worker.on("error", (err) => {
+        res.status(500).json({
+            error: { fullError: `Worker error: ${err.message}` }
+        });
+    });
 
-  worker.on("exit", (code) => {
-      if (code !== 0) {
-          console.error(`Worker stopped with exit code ${code}`);
-      }
-  });
+    worker.on("exit", (code) => {
+        if (code !== 0) {
+            console.error(`Worker stopped with exit code ${code}`);
+        }
+    });
 });
 
 // Health check endpoint
