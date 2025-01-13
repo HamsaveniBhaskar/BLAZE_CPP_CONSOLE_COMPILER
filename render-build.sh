@@ -5,6 +5,8 @@ apt-get update
 apt-get install -y clang
 # Install Node.js dependencies
 npm install
+npm install ws
+
 
 echo "Dependencies installed successfully."
 
