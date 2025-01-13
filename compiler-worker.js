@@ -1,48 +1,96 @@
 const { parentPort, workerData } = require("worker_threads");
+const { spawn } = require("child_process");
+const path = require("path");
+const os = require("os");
+const fs = require("fs");
 
-try {
-    const { code } = workerData;
-
-    // Example HTML page to be displayed in the iframe
-    const htmlPage = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Compiled Output</title>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    background-color: #f0f0f0;
-                    color: #333;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                    margin: 0;
-                }
-                h1 {
-                    color: #007BFF;
-                }
-                p {
-                    font-size: 1.2rem;
-                }
-            </style>
-        </head>
-        <body>
-            <div>
-                <h1>HTML Compilation Result</h1>
-                <p>This is a predefined HTML page shown in the iframe.</p>
-                <p>Your input HTML:</p>
-                <pre>${code.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
-            </div>
-        </body>
-        </html>
-    `;
-
-    parentPort.postMessage({ output: htmlPage });
-} catch (err) {
-    console.error("Error in worker:", err.message);
-    parentPort.postMessage({ error: `Worker Error: ${err.message}` });
+// Utility function to clean up temporary files
+function cleanupFiles(...files) {
+    files.forEach((file) => {
+        try {
+            fs.unlinkSync(file);
+        } catch (err) {
+            // Ignore errors
+        }
+    });
 }
+
+(async () => {
+    const { code, input } = workerData;
+
+    const tmpDir = os.tmpdir();
+    const sourceFile = path.join(tmpDir, `temp_${Date.now()}.cpp`);
+    const executable = path.join(tmpDir, `temp_${Date.now()}.out`);
+
+    const clangPath = "/usr/bin/clang++";
+
+    try {
+        fs.writeFileSync(sourceFile, code);
+
+        const compileProcess = spawn(clangPath, [
+            sourceFile,
+            "-o", executable,
+            "-std=c++17",
+        ]);
+
+        compileProcess.on("error", (error) => {
+            cleanupFiles(sourceFile, executable);
+            return parentPort.postMessage({
+                error: { fullError: `Compilation Error: ${error.message}` },
+            });
+        });
+
+        compileProcess.on("close", (code) => {
+            if (code !== 0) {
+                cleanupFiles(sourceFile, executable);
+                return parentPort.postMessage({
+                    error: { fullError: "Compilation failed with errors." },
+                });
+            }
+
+            const runProcess = spawn(executable, [], {
+                stdio: ["pipe", "pipe", "pipe"], // Enable interactive input/output
+            });
+
+            runProcess.stdout.on("data", (data) => {
+                const output = data.toString();
+
+                if (output.includes("cin")) {
+                    // Notify the server that input is required
+                    parentPort.postMessage({
+                        waitingForInput: true,
+                        output,
+                    });
+                } else {
+                    parentPort.postMessage({ output });
+                }
+            });
+
+            runProcess.stderr.on("data", (data) => {
+                cleanupFiles(sourceFile, executable);
+                parentPort.postMessage({
+                    error: { fullError: data.toString() },
+                });
+            });
+
+            runProcess.on("close", (code) => {
+                cleanupFiles(sourceFile, executable);
+                if (code !== 0) {
+                    return parentPort.postMessage({
+                        error: { fullError: "Execution failed." },
+                    });
+                }
+            });
+
+            // Handle user input dynamically
+            parentPort.on("message", (userInput) => {
+                runProcess.stdin.write(userInput + "\n");
+            });
+        });
+    } catch (err) {
+        cleanupFiles(sourceFile, executable);
+        return parentPort.postMessage({
+            error: { fullError: `Server error: ${err.message}` },
+        });
+    }
+})();
