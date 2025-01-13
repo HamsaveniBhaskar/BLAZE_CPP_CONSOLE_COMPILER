@@ -1,12 +1,9 @@
-// compiler-worker.js
-
 const { parentPort, workerData } = require("worker_threads");
 const { spawnSync } = require("child_process");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
 
-// Utility function to clean up temporary files
 function cleanupFiles(...files) {
     files.forEach((file) => {
         try {
@@ -19,31 +16,33 @@ function cleanupFiles(...files) {
 
 // Worker logic
 (async () => {
-    const { code, input } = workerData;
+    const { code, input } = workerData;  // Destructure code and input from workerData
+
+    if (!code || !input) {
+        return parentPort.postMessage({
+            error: { fullError: "Error: Missing code or input in worker" }
+        });
+    }
 
     // Paths for temporary source file and executable
     const tmpDir = os.tmpdir();
     const sourceFile = path.join(tmpDir, `temp_${Date.now()}.cpp`);
     const executable = path.join(tmpDir, `temp_${Date.now()}.out`);
 
-    // Define the path to Clang++ (or g++ if you prefer)
-    const clangPath = "/usr/bin/clang++"; // Full path to clang++ binary
+    const clangPath = "/usr/bin/clang++";
 
     try {
         // Write the code to the source file
         fs.writeFileSync(sourceFile, code);
 
-        // Compile the code using Clang++ with optimized flags
+        // Compile the code using Clang++
         const compileProcess = spawnSync(clangPath, [
             sourceFile,
             "-o", executable,
-            "-O1",         // Reduce optimization to level 1 for faster compilation
-            "-std=c++17",  // Use C++17 standard
-            "-Wextra",     // Enable essential warnings only
-            "-lstdc++",    // Link the GNU C++ standard library
+            "-O1", "-std=c++17", "-Wextra", "-lstdc++",
         ], {
             encoding: "utf-8",
-            timeout: 5000, // Reduced timeout for compilation
+            timeout: 5000,
         });
 
         if (compileProcess.error || compileProcess.stderr) {
@@ -54,11 +53,11 @@ function cleanupFiles(...files) {
             });
         }
 
-        // Execute the compiled binary and provide the input
+        // Execute the compiled binary
         const runProcess = spawnSync(executable, [], {
-            input,  // Provide the input directly to the program
+            input,
             encoding: "utf-8",
-            timeout: 5000, // Timeout after 5 seconds
+            timeout: 5000,
         });
 
         cleanupFiles(sourceFile, executable);
@@ -70,7 +69,7 @@ function cleanupFiles(...files) {
             });
         }
 
-        // Send the output back to the main thread
+        // Send the output back
         return parentPort.postMessage({
             output: runProcess.stdout || "No output received!",
         });
