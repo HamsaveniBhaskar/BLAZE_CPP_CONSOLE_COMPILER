@@ -1,51 +1,95 @@
 const express = require("express");
-const { Worker } = require("worker_threads");
-const crypto = require("crypto");
+const { spawn } = require("child_process");
+const path = require("path");
+const os = require("os");
+const fs = require("fs");
+const http = require("http");
+const WebSocket = require("ws");
 
 const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
 const port = 3000;
 
-// Enable CORS and JSON parsing
-app.use(require("cors")());
+// Enable JSON parsing for HTTP requests
 app.use(express.json());
 
-app.post("/", (req, res) => {
-    const { code, input } = req.body;
+// POST endpoint to compile the code
+app.post("/compile", (req, res) => {
+    const { code } = req.body;
 
-    // Validate input
     if (!code) {
-        return res.status(400).json({ error: { fullError: "Error: No code provided!" } });
+        return res.status(400).json({ error: "No code provided" });
     }
 
-    // Create a worker thread for compilation and execution
-    const worker = new Worker("./compiler-worker.js", {
-        workerData: { code, input },
-    });
+    // Write the code to a temporary .cpp file
+    const tmpDir = os.tmpdir();
+    const sourceFile = path.join(tmpDir, `temp_${Date.now()}.cpp`);
+    const executable = path.join(tmpDir, `temp_${Date.now()}.out`);
+    const clangPath = "/usr/bin/clang++";
 
-    worker.on("message", (result) => {
-        if (result.waitingForInput) {
-            // Notify the client to provide input
-            res.json({
-                waitingForInput: true,
-                output: result.output || "",
-            });
-        } else {
-            // Final output or error
-            res.json({ output: result.output || "No output received!" });
-        }
-    });
+    fs.writeFileSync(sourceFile, code);
 
-    worker.on("error", (err) => {
-        res.status(500).json({ error: { fullError: `Worker error: ${err.message}` } });
-    });
+    // Compile the C++ code
+    const compileProcess = spawn(clangPath, [sourceFile, "-o", executable, "-std=c++17"]);
 
-    worker.on("exit", (code) => {
+    compileProcess.on("close", (code) => {
         if (code !== 0) {
-            console.error(`Worker stopped with exit code ${code}`);
+            return res.status(500).json({ error: "Compilation failed" });
         }
+
+        // Send the path to the compiled executable
+        res.json({ executable });
     });
 });
 
-app.listen(port, () => {
+// WebSocket connection for real-time execution
+wss.on("connection", (ws, req) => {
+    ws.on("message", (message) => {
+        const { executable, input } = JSON.parse(message);
+
+        // If no executable provided, return an error
+        if (!executable) {
+            ws.send(JSON.stringify({ error: "No executable provided" }));
+            return;
+        }
+
+        // Spawn the compiled executable
+        const runProcess = spawn(executable, [], {
+            stdio: ["pipe", "pipe", "pipe"], // Enable interactive I/O
+        });
+
+        // Send output to the frontend
+        runProcess.stdout.on("data", (data) => {
+            ws.send(JSON.stringify({ output: data.toString() }));
+        });
+
+        runProcess.stderr.on("data", (data) => {
+            ws.send(JSON.stringify({ error: data.toString() }));
+        });
+
+        // Send user input to the program
+        if (input) {
+            runProcess.stdin.write(`${input}\n`);
+        }
+
+        runProcess.on("close", (code) => {
+            ws.send(JSON.stringify({ status: "Program finished", code }));
+            ws.close();
+        });
+
+        // Handle input from the WebSocket (e.g., when the frontend sends input)
+        ws.on("message", (message) => {
+            const { input } = JSON.parse(message);
+            if (input) {
+                runProcess.stdin.write(`${input}\n`);
+            }
+        });
+    });
+});
+
+// Start the server
+server.listen(port, () => {
     console.log(`Server is running on http://localhost:${port}`);
 });
