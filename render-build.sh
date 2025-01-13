@@ -8,6 +8,7 @@ npm install
 npm install ws
 
 
+
 echo "Dependencies installed successfully."
 
 # Run the server
