@@ -57,31 +57,38 @@ app.post("/", (req, res) => {
     });
 
     let interactiveOutput = ""; // Store partial outputs
+    let responseSent = false; // Ensure a single response
 
     worker.on("message", (result) => {
+        if (responseSent) return;
+
         if (result.waitingForInput) {
-            // Notify the client to provide input
+            // Program is waiting for user input
             interactiveOutput += result.output || "";
-            return res.json({
+            res.json({
                 waitingForInput: true,
                 output: interactiveOutput,
             });
-        }
-
-        if (result.output) {
+            responseSent = true; // Response sent for waiting input
+        } else if (result.output) {
+            // Final output
             interactiveOutput += result.output;
+            res.json({ output: interactiveOutput });
+            responseSent = true;
         }
-
-        res.json({ output: interactiveOutput });
     });
 
     worker.on("error", (err) => {
-        res.status(500).json({ error: { fullError: `Worker error: ${err.message}` } });
+        if (!responseSent) {
+            res.status(500).json({ error: { fullError: `Worker error: ${err.message}` } });
+            responseSent = true;
+        }
     });
 
     worker.on("exit", (code) => {
-        if (code !== 0) {
-            console.error(`Worker stopped with exit code ${code}`);
+        if (!responseSent && code !== 0) {
+            res.status(500).json({ error: { fullError: `Worker stopped with exit code ${code}` } });
+            responseSent = true;
         }
     });
 });
