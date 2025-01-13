@@ -17,7 +17,7 @@ function cleanupFiles(...files) {
 
 // Worker logic
 (async () => {
-    const { code } = workerData;
+    const { code, input } = workerData;
 
     // Paths for temporary source file and executable
     const tmpDir = os.tmpdir();
@@ -59,23 +59,18 @@ function cleanupFiles(...files) {
             });
 
             let outputBuffer = "";
-            let isWaitingForInput = false;
 
             runProcess.stdout.on("data", (data) => {
                 const output = data.toString();
                 outputBuffer += output;
 
-                // Check if the program is waiting for input (e.g., encountered `cin`)
-                if (!isWaitingForInput) {
-                    parentPort.postMessage({ output, waitingForInput: true });
-                    isWaitingForInput = true; // Stop listening until input is provided
-                }
+                // Send the output and indicate the program is waiting for input
+                parentPort.postMessage({ output, waitingForInput: true });
             });
 
             parentPort.on("message", (input) => {
                 // Send user input to the program
                 runProcess.stdin.write(`${input}\n`);
-                isWaitingForInput = false; // Allow processing next output
             });
 
             runProcess.stderr.on("data", (data) => {
@@ -92,7 +87,7 @@ function cleanupFiles(...files) {
                         error: { fullError: "Execution failed." },
                     });
                 } else {
-                    parentPort.postMessage({ output: outputBuffer });
+                    parentPort.postMessage({ output: outputBuffer, waitingForInput: false });
                 }
             });
         });
