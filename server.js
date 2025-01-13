@@ -1,47 +1,37 @@
 const express = require('express');
-const WebSocket = require('ws');
-const { Worker } = require('worker_threads');
+const bodyParser = require('body-parser');
+const { exec } = require('child_process');
 const app = express();
-const port = 3000;
+const port = 8080;
 
-// Set up WebSocket server
-const wss = new WebSocket.Server({ noServer: true });
+app.use(bodyParser.json());
 
-wss.on('connection', (ws) => {
-  ws.on('message', (message) => {
-    // Handle incoming message (code to be compiled and run)
-    console.log(`Received message: ${message}`);
+// Simulate interactive input processing for C++ code
+app.post('/', (req, res) => {
+    const { code, input } = req.body;
 
-    // Create a worker thread for compilation and execution
-    const worker = new Worker('./compiler-worker.js', {
-      workerData: { code: message, input: '' }, // Passing input as an empty string
+    // Step 1: Write code to a temp file
+    const fs = require('fs');
+    const tempFilePath = '/tmp/code.cpp';
+    const inputFilePath = '/tmp/input.txt';
+
+    fs.writeFileSync(tempFilePath, code);
+    fs.writeFileSync(inputFilePath, input); // Store the input for simulation
+
+    // Step 2: Compile and run the C++ code, pass input interactively
+    exec(`g++ ${tempFilePath} -o /tmp/program && /tmp/program < ${inputFilePath}`, (error, stdout, stderr) => {
+        if (error) {
+            return res.status(500).send({ error: { fullError: stderr || error.message } });
+        }
+
+        // Step 3: Return the output to the client
+        res.json({
+            output: stdout,
+            error: null
+        });
     });
-
-    worker.on('message', (result) => {
-      // Send output back to the client via WebSocket
-      if (result.output) {
-        ws.send(result.output);  // Send back the program output
-      }
-
-      if (result.error) {
-        ws.send(result.error.fullError);  // Send back the error message
-      }
-    });
-
-    worker.on('error', (err) => {
-      ws.send(`Error: ${err.message}`);
-    });
-  });
 });
 
-// HTTP server for handling other requests (if necessary)
-const server = app.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
-});
-
-// Handle WebSocket upgrade
-server.on('upgrade', (request, socket, head) => {
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request);
-  });
+app.listen(port, () => {
+    console.log(`Server listening at http://localhost:${port}`);
 });
