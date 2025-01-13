@@ -15,18 +15,22 @@ function cleanupFiles(...files) {
     });
 }
 
+// Worker logic
 (async () => {
-    const { code, input } = workerData;
+    const { code } = workerData;
 
+    // Paths for temporary source file and executable
     const tmpDir = os.tmpdir();
     const sourceFile = path.join(tmpDir, `temp_${Date.now()}.cpp`);
     const executable = path.join(tmpDir, `temp_${Date.now()}.out`);
 
-    const clangPath = "/usr/bin/clang++";
+    const clangPath = "/usr/bin/clang++"; // Path to Clang++
 
     try {
+        // Write the code to the source file
         fs.writeFileSync(sourceFile, code);
 
+        // Compile the code
         const compileProcess = spawn(clangPath, [
             sourceFile,
             "-o", executable,
@@ -35,7 +39,7 @@ function cleanupFiles(...files) {
 
         compileProcess.on("error", (error) => {
             cleanupFiles(sourceFile, executable);
-            return parentPort.postMessage({
+            parentPort.postMessage({
                 error: { fullError: `Compilation Error: ${error.message}` },
             });
         });
@@ -43,27 +47,35 @@ function cleanupFiles(...files) {
         compileProcess.on("close", (code) => {
             if (code !== 0) {
                 cleanupFiles(sourceFile, executable);
-                return parentPort.postMessage({
+                parentPort.postMessage({
                     error: { fullError: "Compilation failed with errors." },
                 });
+                return;
             }
 
+            // Execute the binary
             const runProcess = spawn(executable, [], {
                 stdio: ["pipe", "pipe", "pipe"], // Enable interactive input/output
             });
 
+            let outputBuffer = "";
+            let isWaitingForInput = false;
+
             runProcess.stdout.on("data", (data) => {
                 const output = data.toString();
+                outputBuffer += output;
 
-                if (output.includes("cin")) {
-                    // Notify the server that input is required
-                    parentPort.postMessage({
-                        waitingForInput: true,
-                        output,
-                    });
-                } else {
-                    parentPort.postMessage({ output });
+                // Check if the program is waiting for input (e.g., encountered `cin`)
+                if (!isWaitingForInput) {
+                    parentPort.postMessage({ output, waitingForInput: true });
+                    isWaitingForInput = true; // Stop listening until input is provided
                 }
+            });
+
+            parentPort.on("message", (input) => {
+                // Send user input to the program
+                runProcess.stdin.write(`${input}\n`);
+                isWaitingForInput = false; // Allow processing next output
             });
 
             runProcess.stderr.on("data", (data) => {
@@ -76,20 +88,17 @@ function cleanupFiles(...files) {
             runProcess.on("close", (code) => {
                 cleanupFiles(sourceFile, executable);
                 if (code !== 0) {
-                    return parentPort.postMessage({
+                    parentPort.postMessage({
                         error: { fullError: "Execution failed." },
                     });
+                } else {
+                    parentPort.postMessage({ output: outputBuffer });
                 }
-            });
-
-            // Handle user input dynamically
-            parentPort.on("message", (userInput) => {
-                runProcess.stdin.write(userInput + "\n");
             });
         });
     } catch (err) {
         cleanupFiles(sourceFile, executable);
-        return parentPort.postMessage({
+        parentPort.postMessage({
             error: { fullError: `Server error: ${err.message}` },
         });
     }
