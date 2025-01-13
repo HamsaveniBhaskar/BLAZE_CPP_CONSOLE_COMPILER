@@ -1,43 +1,26 @@
-const { parentPort, workerData } = require('worker_threads');
-const { exec } = require('child_process');
+// Inside compiler-worker.js
+self.onmessage = function (e) {
+    const { code, input } = e.data;
 
-// This function compiles and runs the code
-function runCode(code, input) {
-  // Save the code to a temporary file (e.g., temp.cpp for C++ code)
-  const fs = require('fs');
-  const path = require('path');
-  const tempFilePath = path.join(__dirname, 'temp.cpp');
-  const outputFilePath = path.join(__dirname, 'temp.out');
-  
-  fs.writeFileSync(tempFilePath, code, 'utf8');
-
-  // Compile the C++ code using g++ (adjust for other languages accordingly)
-  const compileCommand = `g++ ${tempFilePath} -o ${outputFilePath}`;
-  exec(compileCommand, (compileError, compileStdout, compileStderr) => {
-    if (compileError || compileStderr) {
-      // If compilation fails, return the error
-      parentPort.postMessage({ error: { fullError: `Compilation Error: ${compileStderr || compileError.message}` } });
-      return;
-    }
-
-    // Run the compiled executable (passing input if necessary)
-    const runCommand = `${outputFilePath} ${input ? `< ${input}` : ''}`;
-    exec(runCommand, (runError, runStdout, runStderr) => {
-      if (runError || runStderr) {
-        // If execution fails, return the error
-        parentPort.postMessage({ error: { fullError: `Runtime Error: ${runStderr || runError.message}` } });
-        return;
-      }
-
-      // Return the output of the code execution
-      parentPort.postMessage({ output: runStdout || 'No output' });
-
-      // Clean up the temporary files
-      fs.unlinkSync(tempFilePath);
-      fs.unlinkSync(outputFilePath);
+    // Simulate a process to handle compiling and running of code
+    fetch("https://blaze-cpp-compiler.onrender.com", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            code: code,
+            input: input
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        postMessage({
+            output: data.output || 'No output',
+            error: data.error
+        });
+    })
+    .catch(err => {
+        postMessage({ error: err.message });
     });
-  });
-}
-
-// Process the incoming code and input from the main thread
-runCode(workerData.code, workerData.input);
+};
