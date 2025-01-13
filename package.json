@@ -3,7 +3,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-     "ws": "^8.12.0", 
+   "node-cache": "^5.1.2",
     "express": "^4.17.1",
     "body-parser": "^1.19.0",
     "path": "^0.12.7",
