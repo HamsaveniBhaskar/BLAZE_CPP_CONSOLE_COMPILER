@@ -1,100 +1,68 @@
-const { parentPort, workerData } = require("worker_threads");
-const { spawn } = require("child_process");
-const path = require("path");
-const os = require("os");
-const fs = require("fs");
+function runCode() {
+  const loader = document.getElementById("loader");
+  const runner = document.getElementById("run");
 
-// Utility function to clean up temporary files
-function cleanupFiles(...files) {
-    files.forEach((file) => {
-        try {
-            fs.unlinkSync(file);
-        } catch (err) {
-            // Ignore errors
-        }
-    });
+  runner.style.display = "none";
+  loader.style.display = "inline-block";
+
+  const code = editor.getValue();
+  const input = document.getElementById("input").value;
+
+  const outputDiv = document.getElementById("output");
+  outputDiv.textContent = "Executing..."; // Placeholder text
+
+  const ioTabButton = document.querySelector(".tab-left .tab-btn:nth-child(2)");
+  activateTab(ioTabButton);
+  showIO();
+
+  const startTime = Date.now(); // Record the start time
+  const timeoutDuration = 30000; // Timeout duration for the request
+
+  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Request Timeout")), timeoutDuration));
+
+  const fetchPromise = fetch("https://blaze-cpp-compiler.onrender.com", {
+      method: "POST",
+      headers: {
+          "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+          code,
+          input,
+      }),
+  })
+  .then((response) => {
+      if (!response.ok) {
+          throw new Error(`Server Error: ${response.statusText}`);
+      }
+      return response.json();
+  });
+
+  Promise.race([fetchPromise, timeoutPromise])
+      .then((data) => {
+          const endTime = Date.now(); // Record the end time
+          const timeTaken = ((endTime - startTime) / 1000).toFixed(2); // Time in seconds
+
+          if (data.error) {
+              // Handle errors (compilation or runtime)
+              outputDiv.textContent = data.error.fullError || "No output received!";
+          } else {
+              // Handle successful execution
+              outputDiv.textContent = data.output || "No output received!";
+          }
+
+          // Add success message and time taken
+          setTimeout(() => {
+              outputDiv.textContent += `\n\n===Code executed successfully===\nTimeTaken: ${timeTaken} seconds`;
+          }, 100);
+
+          loader.style.display = "none";
+          runner.style.display = "flex";
+      })
+      .catch((error) => {
+          console.error("Error occurred:", error);
+          outputDiv.textContent = `Error running code: ${error.message}`;
+
+          loader.style.display = "none";
+          runner.style.display = "flex";
+      });
 }
-
-// Worker logic
-(async () => {
-    const { code, input } = workerData;
-
-    // Paths for temporary source file and executable
-    const tmpDir = os.tmpdir();
-    const sourceFile = path.join(tmpDir, `temp_${Date.now()}.cpp`);
-    const executable = path.join(tmpDir, `temp_${Date.now()}.out`);
-
-    const clangPath = "/usr/bin/clang++"; // Path to Clang++
-
-    try {
-        // Write the code to the source file
-        fs.writeFileSync(sourceFile, code);
-
-        // Compile the code
-        const compileProcess = spawn(clangPath, [
-            sourceFile,
-            "-o", executable,
-            "-std=c++17",
-        ]);
-
-        compileProcess.on("error", (error) => {
-            cleanupFiles(sourceFile, executable);
-            parentPort.postMessage({
-                error: { fullError: `Compilation Error: ${error.message}` },
-            });
-        });
-
-        compileProcess.on("close", (code) => {
-            if (code !== 0) {
-                cleanupFiles(sourceFile, executable);
-                parentPort.postMessage({
-                    error: { fullError: "Compilation failed with errors." },
-                });
-                return;
-            }
-
-            // Execute the binary
-            const runProcess = spawn(executable, [], {
-                stdio: ["pipe", "pipe", "pipe"], // Enable interactive input/output
-            });
-
-            let outputBuffer = "";
-
-            runProcess.stdout.on("data", (data) => {
-                const output = data.toString();
-                outputBuffer += output;
-
-                // Send the output and indicate the program is waiting for input
-                parentPort.postMessage({ output, waitingForInput: true });
-            });
-
-            parentPort.on("message", (input) => {
-                // Send user input to the program
-                runProcess.stdin.write(`${input}\n`);
-            });
-
-            runProcess.stderr.on("data", (data) => {
-                cleanupFiles(sourceFile, executable);
-                parentPort.postMessage({
-                    error: { fullError: data.toString() },
-                });
-            });
-
-            runProcess.on("close", (code) => {
-                cleanupFiles(sourceFile, executable);
-                if (code !== 0) {
-                    parentPort.postMessage({
-                        error: { fullError: "Execution failed." },
-                    });
-                } else {
-                    parentPort.postMessage({ output: outputBuffer, waitingForInput: false });
-                }
-            });
-        });
-    } catch (err) {
-        cleanupFiles(sourceFile, executable);
-        parentPort.postMessage({
-            error: { fullError: `Server error: ${err.message}` },
-        });
-    }
-})();
