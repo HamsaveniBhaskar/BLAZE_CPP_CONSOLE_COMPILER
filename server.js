@@ -13,29 +13,33 @@ app.use(express.json());
 app.post("/", (req, res) => {
     const { code, input } = req.body;
 
-    // Validate the input data
-    if (!code || !input) {
-        return res.status(400).json({
-            error: { fullError: "Error: Missing code or input" }
-        });
+    // Validate code
+    if (!code) {
+        return res.status(400).json({ error: { fullError: "Error: No code provided!" } });
     }
 
-    // Generate a unique hash for the code
+    // Generate a unique hash for the code to cache the result
     const codeHash = crypto.createHash("md5").update(code).digest("hex");
 
-    // Create a worker thread for compilation
+    // Check if result is cached
+    if (cache.has(codeHash)) {
+        return res.json({ output: cache.get(codeHash).result });
+    }
+
+    // Pass the code and user input to the worker
     const worker = new Worker("./compiler-worker.js", {
-        workerData: { code, input },  // Pass the code and input to the worker
+        workerData: { code, input },
     });
 
     worker.on("message", (result) => {
+        if (result.output) {
+            manageCache(codeHash, result.output);
+        }
         res.json(result);
     });
 
     worker.on("error", (err) => {
-        res.status(500).json({
-            error: { fullError: `Worker error: ${err.message}` }
-        });
+        res.status(500).json({ error: { fullError: `Worker error: ${err.message}` } });
     });
 
     worker.on("exit", (code) => {
@@ -44,6 +48,7 @@ app.post("/", (req, res) => {
         }
     });
 });
+
 
 // Health check endpoint
 app.get("/health", (req, res) => {
