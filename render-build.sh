@@ -5,9 +5,7 @@ apt-get update
 apt-get install -y clang
 # Install Node.js dependencies
 npm install
-npm install ws
-
-
+npm install node-cache
 
 echo "Dependencies installed successfully."
 
