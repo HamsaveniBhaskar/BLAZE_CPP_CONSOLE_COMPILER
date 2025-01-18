@@ -1,13 +1,28 @@
 {
+  "name": "interactive-cpp-compiler",
+  "version": "1.0.0",
+  "description": "An online interactive C++ compiler with Ace Editor and backend using Clang/LLVM.",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-   "node-cache": "^5.1.2",
-    "express": "^4.17.1",
-    "body-parser": "^1.19.0",
-    "path": "^0.12.7",
-    "child_process": "^1.0.2",
-    "cors": "^2.8.5"
-  }
+    "body-parser": "^1.20.2",
+    "express": "^4.18.2",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "keywords": [
+    "C++",
+    "compiler",
+    "interactive",
+    "Ace",
+    "Clang",
+    "LLVM",
+    "Node.js"
+  ],
+  "author": "BlazeCompiler",
+  "license": "MIT"
 }
