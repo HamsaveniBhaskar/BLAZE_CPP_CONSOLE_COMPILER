@@ -6,8 +6,7 @@ apt-get install -y clang
 # Install Node.js dependencies
 npm install
 npm install node-cache
-npm install cors
-npm install express
+
 
 echo "Dependencies installed successfully."
 
