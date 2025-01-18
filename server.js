@@ -1,106 +1,127 @@
 const express = require("express");
-const { Worker } = require("worker_threads");
-const crypto = require("crypto");
+const bodyParser = require("body-parser");
 const cors = require("cors");
+const { spawn } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
 const app = express();
-const port = 3000;
+const PORT = 3000;
 
-// Enable CORS and JSON body parsing
+// Middleware
 app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
+app.use(express.static("public"));
 
-// Cache for compiled results
-const cache = new Map();
-const CACHE_EXPIRATION_TIME = 60 * 60 * 1000; // 1 hour
-const MAX_CACHE_SIZE = 100;
+// State to manage program execution
+let currentProgram = null;
+let inputQueue = [];
+let currentClient = null;
 
-// Cache cleanup logic
-function cleanCache() {
-  const now = Date.now();
-  for (const [key, { timestamp }] of cache.entries()) {
-    if (now - timestamp > CACHE_EXPIRATION_TIME) {
-      cache.delete(key);
+app.get("/run", (req, res) => {
+    const code = req.query.code;
+    if (!code) {
+        res.status(400).send("Code is required.");
+        return;
     }
-  }
-}
 
-// Cache management
-function manageCache(codeHash, output) {
-  if (cache.size >= MAX_CACHE_SIZE) {
-    const oldestKey = [...cache.keys()][0];
-    cache.delete(oldestKey);
-  }
-  cache.set(codeHash, { result: output, timestamp: Date.now() });
-}
+    console.log("Code received for execution:\n", code); // Log the received code
 
-// POST endpoint for code compilation and interactive execution
-app.post("/", (req, res) => {
-  const { code } = req.body;
+    const uniqueId = Date.now();
+    const tempDir = os.tmpdir();
+    const fileName = path.join(tempDir, `temp_${uniqueId}.cpp`);
+    const executable = path.join(tempDir, `temp_${uniqueId}.out`);
 
-  // Validate input
-  if (!code) {
-    return res.status(400).json({ error: { fullError: "Error: No code provided!" } });
-  }
+    try {
+        // Save code to a temporary file
+        fs.writeFileSync(fileName, code);
 
-  // Generate a unique hash for the code
-  const codeHash = crypto.createHash("md5").update(code).digest("hex");
+        // Compile the code
+        const compileCommand = `clang++ -o "${executable}" "${fileName}"`;
+        require("child_process").execSync(compileCommand);
 
-  // Check cache for existing results
-  if (cache.has(codeHash)) {
-    return res.json({ output: cache.get(codeHash).result });
-  }
+        // Start the program
+        currentProgram = spawn(executable);
+        currentClient = res;
 
-  // Create a new worker for the task
-  const worker = new Worker("./compiler-worker.js", {
-    workerData: { code },
-  });
+        // Setup response as an event stream
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
 
-  // Stream output to the client
-  res.setHeader("Content-Type", "text/plain");
-  res.setHeader("Transfer-Encoding", "chunked");
+        currentProgram.stdout.on("data", (data) => {
+            // Convert the output to string
+            let output = data.toString();
+            console.log("Program output:", output.trim()); // Log the program output
+        
+            // Replace escape sequences with visible formats
+            const formattedOutput = output
+                .replace(/\\n/g, "\n")        // Newline
+                .replace(/\\t/g, "tt")     // Horizontal tab (convert to spaces)
+                .replace(/\\r/g, "\r")       // Carriage return
+                .replace(/\\b/g, "\b")       // Backspace (Note: Backspace won't work as expected in web)
+                .replace(/\\f/g, "\f")       // Form feed
+                .replace(/\\v/g, "&nbsp") // Vertical tab (convert to visible spaces)
+                .replace(/\\\\/g, "\\")      // Backslash
+                .replace(/\\'/g, "'")        // Single quote
+                .replace(/\\"/g, "\"")       // Double quote
+                .replace(/\\\?/g, "?")       // Question mark
+                .replace(/\\a/g, "\u0007")   // Bell (may not be audible on browsers)
+                .replace(/\\0/g, "\0")       // Null character (won't render in browser)
+                .replace(/\\x([0-9A-Fa-f]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16))) // Hex
+                .replace(/\\u([0-9A-Fa-f]{4})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16))) // Unicode (16-bit)
+                .replace(/\\U([0-9A-Fa-f]{8})/g, (match, hex) => String.fromCodePoint(parseInt(hex, 16))); // Unicode (32-bit)
+        
+            
+        
+                // Split the formatted output by newline and send each line separately
+                const lines = formattedOutput.split("\n");
+                lines.forEach((line) => {
+                    // Send the output as normal
+                    res.write(`data: ${line}\n\n`);
+                });
 
-  // Handle worker messages
-  worker.on("message", (message) => {
-    if (message.output) {
-      res.write(message.output); // Stream output to the frontend
-    } else if (message.error) {
-      res.write(`Error: ${message.error.fullError}`);
+        });
+        
+        
+
+        currentProgram.stderr.on("data", (data) => {
+            console.error("Program error:", data.toString()); // Log any error output
+            res.write(`data: Error: ${data.toString()}\n\n`);
+        });
+
+        currentProgram.on("close", (code) => {
+            console.log("Program execution completed with exit code:", code); // Log program termination
+            res.write("data: DONE\n\n");
+            res.end();
+            currentProgram = null;
+            currentClient = null;
+        });
+    } catch (err) {
+        console.error("Compilation or execution error:", err.message); // Log errors during compilation or execution
+        res.status(500).send(`Server Error: ${err.message}`);
     }
-  });
-
-  // Handle worker errors
-  worker.on("error", (err) => {
-    res.write(`Worker error: ${err.message}`);
-    res.end();
-  });
-
-  // Handle worker exit
-  worker.on("exit", (code) => {
-    if (code !== 0) {
-      res.write(`Worker stopped with exit code ${code}`);
-    }
-    res.end(); // End the response when the worker finishes
-  });
-
-  // Listen for input from the frontend
-  req.on("data", (chunk) => {
-    const input = chunk.toString();
-    worker.postMessage(input); // Send input to the worker
-  });
 });
 
-// Health check endpoint
-app.get("/health", (req, res) => {
-  res.json({ status: "Server is running" });
+app.post("/input", (req, res) => {
+    const userInput = req.body.input ? req.body.input.trim() : "";  // If input is empty, assign an empty string
+    console.log("Input received from client:", userInput); // Log the received input
+
+    if (currentProgram) {
+        if (userInput) {
+            currentProgram.stdin.write(`${userInput}\n`);
+            res.status(200).send("Input processed.");
+        } else {
+            res.status(200).send("No input received.");
+        }
+    } else {
+        res.status(400).send("No program is currently running.");
+    }
 });
 
-// Periodic health check ping
-setInterval(() => {
-  console.log("Health check ping");
-}, 10 * 60 * 1000); // Every 10 minutes
 
 // Start the server
-app.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
+app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
 });
